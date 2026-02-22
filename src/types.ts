@@ -30,6 +30,44 @@ export const EventStatus = {
 
 export type EventStatusValue = (typeof EventStatus)[keyof typeof EventStatus];
 
+// ─── Event filter ─────────────────────────────────────────────────────────────
+
+export interface EventFilter {
+  /**
+   * Only return events matching these Wikidata service type(s).
+   * Use `WikidataId.*` constants for convenience and intellisense.
+   *
+   * @example
+   * // Single type
+   * serviceType: WikidataId.Mass
+   *
+   * @example
+   * // Multiple types
+   * serviceType: [WikidataId.Mass, WikidataId.EucharisticAdoration]
+   */
+  serviceType?: WikidataServiceId | WikidataServiceId[];
+
+  /**
+   * Only return events matching these BCP 47 language code(s).
+   *
+   * @example
+   * language: "la"           // Latin Mass only
+   * language: ["en", "es"]   // English or Spanish
+   */
+  language?: string | string[];
+
+  /**
+   * Whether to include events that have no `additionalType` set.
+   *
+   * Defaults to `true` when no `serviceType` filter is active (include everything).
+   * Defaults to `false` when a `serviceType` filter is active (strict match).
+   *
+   * Set to `true` alongside a `serviceType` filter to also catch parishes
+   * that haven't adopted `additionalType` yet.
+   */
+  includeUntyped?: boolean;
+}
+
 // ─── Raw JSON-LD types (as they appear on parish websites) ───────────────────
 
 export interface RawPlace {

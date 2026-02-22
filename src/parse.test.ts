@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseEvent, parseEvents } from "./parse.js";
-import { getUpcomingMasses } from "./schedule.js";
+import { getUpcomingEvents, getUpcomingMasses } from "./schedule.js";
 import { WikidataId, EventStatus } from "./types.js";
 
 describe("parseEvent", () => {
@@ -201,5 +201,76 @@ describe("getUpcomingMasses", () => {
     const events = [parseEvent(raw)];
     const masses = getUpcomingMasses(events, { from });
     expect(masses).toHaveLength(0);
+  });
+});
+
+describe("getUpcomingEvents — filtering", () => {
+  const from = new Date("2025-03-16T00:00:00Z"); // Sunday
+  const to = new Date("2025-03-16T23:59:59Z");
+
+  const makeEvent = (name: string, additionalType?: string, inLanguage?: string) =>
+    parseEvent({
+      "@type": "Event" as const,
+      name,
+      additionalType,
+      inLanguage,
+      startDate: "2025-03-16T11:00:00Z",
+    });
+
+  const massEvent = makeEvent("Sunday Mass", WikidataId.Mass);
+  const adorationEvent = makeEvent("Adoration", WikidataId.EucharisticAdoration);
+  const untypedEvent = makeEvent("Parish Event"); // no additionalType
+  const latinMassEvent = makeEvent("TLM", WikidataId.TraditionalLatinMass, "la");
+  const spanishMassEvent = makeEvent("Spanish Mass", WikidataId.Mass, "es");
+
+  const all = [massEvent, adorationEvent, untypedEvent, latinMassEvent, spanishMassEvent];
+
+  it("returns all events when no filter is set", () => {
+    const results = getUpcomingEvents(all, { from, to });
+    expect(results).toHaveLength(5);
+  });
+
+  it("filters by single serviceType", () => {
+    const results = getUpcomingEvents(all, { from, to, serviceType: WikidataId.Mass });
+    expect(results.map((r) => r.name)).toEqual(["Sunday Mass", "Spanish Mass"]);
+  });
+
+  it("filters by multiple serviceTypes", () => {
+    const results = getUpcomingEvents(all, {
+      from, to,
+      serviceType: [WikidataId.Mass, WikidataId.EucharisticAdoration],
+    });
+    expect(results).toHaveLength(3);
+  });
+
+  it("excludes untyped events by default when serviceType filter is active", () => {
+    const results = getUpcomingEvents(all, { from, to, serviceType: WikidataId.Mass });
+    expect(results.map((r) => r.name)).not.toContain("Parish Event");
+  });
+
+  it("includes untyped events when includeUntyped: true", () => {
+    const results = getUpcomingEvents(all, {
+      from, to,
+      serviceType: WikidataId.Mass,
+      includeUntyped: true,
+    });
+    expect(results.map((r) => r.name)).toContain("Parish Event");
+  });
+
+  it("filters by language", () => {
+    const results = getUpcomingEvents(all, { from, to, language: "la" });
+    expect(results.map((r) => r.name)).toEqual(["TLM"]);
+  });
+
+  it("filters by language array (OR logic)", () => {
+    const results = getUpcomingEvents(all, { from, to, language: ["la", "es"] });
+    expect(results).toHaveLength(2);
+  });
+
+  it("getUpcomingMasses includes untyped events", () => {
+    const results = getUpcomingMasses(all, { from, to });
+    expect(results.map((r) => r.name)).toContain("Parish Event");
+    expect(results.map((r) => r.name)).not.toContain("Adoration");
+    expect(results.map((r) => r.name)).not.toContain("TLM");
   });
 });

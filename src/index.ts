@@ -9,7 +9,7 @@
  */
 
 export { parseEvent, parseEvents, extractEventsFromJsonLd } from "./parse.js";
-export { expandSchedule, getUpcomingMasses } from "./schedule.js";
+export { expandSchedule, getUpcomingEvents, getUpcomingMasses } from "./schedule.js";
 export type {
   // Raw JSON-LD shapes
   RawEvent,
@@ -29,5 +29,6 @@ export {
   EventStatus,
   type WikidataServiceId,
   type EventStatusValue,
+  type EventFilter,
 } from "./types.js";
 export type { ExpandOptions } from "./schedule.js";

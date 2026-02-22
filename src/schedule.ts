@@ -1,4 +1,5 @@
-import type { ParsedEvent, ParsedSchedule, MassInstance } from "./types.js";
+import type { ParsedEvent, ParsedSchedule, MassInstance, EventFilter } from "./types.js";
+import { WikidataId } from "./types.js";
 
 // ─── ISO 8601 duration parser (subset: weeks, days, months) ─────────────────
 
@@ -167,28 +168,64 @@ export function expandSchedule(
   return results;
 }
 
-// ─── High-level: resolve events to MassInstances ─────────────────────────────
+// ─── Filter helpers ───────────────────────────────────────────────────────────
+
+function toArr<T>(v: T | T[] | undefined): T[] {
+  if (v === undefined || v === null) return [];
+  return Array.isArray(v) ? v : [v];
+}
 
 /**
- * Resolve a list of ParsedEvents into concrete MassInstance objects
- * within the given time window.
- *
- * - One-off events with a startDate are included if they fall in the window.
- * - Recurring schedule events are expanded via expandSchedule.
- * - Cancellations override matching scheduled instances.
+ * Returns true if the event passes the given EventFilter.
+ * Called before expansion so we never waste cycles on excluded events.
  */
-export function getUpcomingMasses(
-  events: ParsedEvent[],
-  opts: ExpandOptions = {}
-): MassInstance[] {
-  const from = opts.from ?? new Date();
-  const to = opts.to ?? new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000);
+function matchesFilter(event: ParsedEvent, filter: EventFilter): boolean {
+  const serviceTypes = toArr(filter.serviceType);
+  const languages = toArr(filter.language);
 
+  // ── serviceType filter ──────────────────────────────────────────────────────
+  if (serviceTypes.length > 0) {
+    const hasType = !!event.serviceType;
+    if (!hasType) {
+      // Event has no additionalType — honour includeUntyped (default: false)
+      if (filter.includeUntyped !== true) return false;
+    } else if (!serviceTypes.includes(event.serviceType as any)) {
+      return false;
+    }
+  }
+  // No serviceType filter → includeUntyped implicitly true (include everything)
+
+  // ── language filter ─────────────────────────────────────────────────────────
+  // Strict: if a language filter is active, only events that explicitly
+  // declare a matching language pass. Events with no language set are excluded.
+  if (languages.length > 0) {
+    if (
+      event.languages.length === 0 ||
+      !event.languages.some((l) => languages.includes(l))
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// ─── Core resolver (shared by both public functions) ─────────────────────────
+
+function resolveEvents(
+  events: ParsedEvent[],
+  from: Date,
+  to: Date,
+  opts: ExpandOptions,
+  filter: EventFilter
+): MassInstance[] {
   const instances: MassInstance[] = [];
 
   for (const event of events) {
+    // Pre-filter before any expansion work
+    if (!matchesFilter(event, filter)) continue;
+
     if (event.schedule) {
-      // Recurring — expand
       // Skip stale schedules (endDate in the past)
       if (event.schedule.endDate && event.schedule.endDate < from) continue;
 
@@ -215,7 +252,6 @@ export function getUpcomingMasses(
         });
       }
     } else if (event.startDate) {
-      // One-off event
       if (event.startDate >= from && event.startDate <= to) {
         instances.push({
           startDate: event.startDate,
@@ -233,30 +269,94 @@ export function getUpcomingMasses(
     }
   }
 
-  // Apply cancellations / rescheduling: one-off EventCancelled/EventRescheduled
-  // entries override any scheduled instance on the same date+location
-  const cancellations = instances.filter(
+  // Separate scheduled instances from one-off overrides (cancellations / rescheduling)
+  const scheduled = instances.filter((i) => i.status === "scheduled");
+  const overrides = instances.filter(
     (i) => i.status === "cancelled" || i.status === "rescheduled"
   );
 
-  const resolved = instances.map((instance) => {
-    if (instance.status !== "scheduled") return instance;
-    const override = cancellations.find(
-      (c) =>
-        toYMD(c.startDate) === toYMD(instance.startDate) &&
-        c.location?.osmId === instance.location?.osmId
-    );
-    return override ?? instance;
-  });
+  const appliedOverrides = new Set<MassInstance>();
+  const result: MassInstance[] = [];
 
-  // Sort by start time, remove duplicates from the cancellation pass
-  const seen = new Set<string>();
-  return resolved
-    .filter((i) => {
-      const key = `${i.startDate.toISOString()}|${i.location?.osmId ?? ""}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+  for (const s of scheduled) {
+    const override = overrides.find(
+      (o) =>
+        toYMD(o.startDate) === toYMD(s.startDate) &&
+        o.location?.osmId === s.location?.osmId
+    );
+    if (override) {
+      result.push(override);
+      appliedOverrides.add(override);
+    } else {
+      result.push(s);
+    }
+  }
+
+  // Standalone overrides that didn't match a scheduled event (e.g. a one-off
+  // event that was later cancelled)
+  for (const o of overrides) {
+    if (!appliedOverrides.has(o)) result.push(o);
+  }
+
+  return result.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/**
+ * Resolve a list of ParsedEvents into concrete MassInstance objects
+ * within the given time window, with optional filtering by service type
+ * and language.
+ *
+ * This is the primary API. Use `WikidataId.*` constants for `serviceType`
+ * to get full intellisense.
+ *
+ * @example
+ * // All upcoming events in the next 7 days
+ * getUpcomingEvents(events, { from, to })
+ *
+ * @example
+ * // Only Mass and Adoration
+ * getUpcomingEvents(events, {
+ *   serviceType: [WikidataId.Mass, WikidataId.EucharisticAdoration],
+ * })
+ *
+ * @example
+ * // Latin Mass only, including parishes that haven't set additionalType
+ * getUpcomingEvents(events, {
+ *   serviceType: WikidataId.TraditionalLatinMass,
+ *   language: "la",
+ *   includeUntyped: true,
+ * })
+ */
+export function getUpcomingEvents(
+  events: ParsedEvent[],
+  opts: ExpandOptions & EventFilter = {}
+): MassInstance[] {
+  const from = opts.from ?? new Date();
+  const to = opts.to ?? new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000);
+  return resolveEvents(events, from, to, opts, opts);
+}
+
+/**
+ * Convenience wrapper — returns Mass events only, including events where
+ * `additionalType` is unset (most parishes don't set it yet).
+ *
+ * Equivalent to:
+ * ```ts
+ * getUpcomingEvents(events, {
+ *   serviceType: WikidataId.Mass,
+ *   includeUntyped: true,
+ * })
+ * ```
+ */
+export function getUpcomingMasses(
+  events: ParsedEvent[],
+  opts: ExpandOptions = {}
+): MassInstance[] {
+  return getUpcomingEvents(events, {
+    ...opts,
+    serviceType: WikidataId.Mass,
+    includeUntyped: true,
+  });
 }
