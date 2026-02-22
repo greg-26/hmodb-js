@@ -10,6 +10,22 @@
 
 export { parseEvent, parseEvents, extractEventsFromJsonLd } from "./parse.js";
 export { expandSchedule, getUpcomingEvents, getUpcomingMasses } from "./schedule.js";
+export {
+  buildEvent,
+  buildSchedule,
+  buildLocation,
+  buildCancellation,
+  buildRescheduled,
+  toJsonLd,
+  toJsonLdString,
+  toScriptTag,
+  type DayName,
+  type ScheduleOptions,
+  type LocationOptions,
+  type EventOptions,
+  type CancellationOptions,
+  type RescheduleOptions,
+} from "./generate.js";
 export type {
   // Raw JSON-LD shapes
   RawEvent,
