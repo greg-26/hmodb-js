@@ -1,7 +1,7 @@
-import type { ParsedEvent, ParsedSchedule, MassInstance, EventFilter } from "./types.js";
+import type { ParsedEvent, ParsedSchedule, EventInstance, EventFilter } from "./types.js";
 import { WikidataId } from "./types.js";
 
-// ─── ISO 8601 duration parser (subset: weeks, days, months) ─────────────────
+// ─── ISO 8601 duration parser (subset: weeks, days, months) ──────────────────
 
 interface Duration {
   years?: number;
@@ -11,9 +11,8 @@ interface Duration {
 }
 
 function parseDuration(iso: string): Duration {
-  // e.g. "P1W", "P2W", "P1D", "P1M", "P1Y", "P1DT12H" (we handle date part only)
   const match = iso.match(/^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?/);
-  if (!match) return { weeks: 1 }; // default to weekly
+  if (!match) return { weeks: 1 };
   return {
     years: match[1] ? parseInt(match[1]) : undefined,
     months: match[2] ? parseInt(match[2]) : undefined,
@@ -22,7 +21,6 @@ function parseDuration(iso: string): Duration {
   };
 }
 
-/** Advance a date by one duration unit */
 function addDuration(date: Date, dur: Duration): Date {
   const d = new Date(date);
   if (dur.years) d.setFullYear(d.getFullYear() + dur.years);
@@ -36,21 +34,14 @@ function toYMD(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Return the UTC year/month/day of a Date as separate values */
 function utcYMD(date: Date): [number, number, number] {
   return [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()];
 }
 
-/**
- * Given a UTC date (midnight) and an "HH:mm" time string in the given timezone,
- * return the exact UTC instant that represents that local time on that calendar day.
- */
 function applyTimeToDate(date: Date, time: string, timezone?: string): Date {
-  const ymd = toYMD(date); // "YYYY-MM-DD" based on UTC date
+  const ymd = toYMD(date);
   if (timezone) {
     try {
-      // We want: "what UTC instant is YYYY-MM-DDTHH:mm:00 in `timezone`?"
-      // Strategy: parse as if UTC, then compute the timezone offset at that moment.
       const dtStr = `${ymd}T${time}:00`;
       const probe = new Date(`${dtStr}Z`);
       const parts = new Intl.DateTimeFormat("en-US", {
@@ -63,8 +54,7 @@ function applyTimeToDate(date: Date, time: string, timezone?: string): Date {
         second: "2-digit",
         hour12: false,
       }).formatToParts(probe);
-      const get = (t: string) =>
-        parts.find((p) => p.type === t)?.value ?? "00";
+      const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
       const localMs = new Date(
         `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}Z`
       ).getTime();
@@ -80,16 +70,17 @@ function applyTimeToDate(date: Date, time: string, timezone?: string): Date {
 // ─── Schedule expansion ───────────────────────────────────────────────────────
 
 export interface ExpandOptions {
-  /** Start of the window to expand into (defaults to today) */
+  /** Start of the window to expand into (defaults to now) */
   from?: Date;
   /** End of the window (defaults to 30 days from `from`) */
   to?: Date;
-  /** Maximum number of instances to return (safety cap, default 500) */
+  /** Maximum instances to return as a safety cap (default 500) */
   limit?: number;
 }
 
 /**
- * Expand a recurring ParsedSchedule into concrete Date instances.
+ * Expand a recurring ParsedSchedule into concrete Date instances
+ * within the given time window.
  */
 export function expandSchedule(
   schedule: ParsedSchedule,
@@ -102,28 +93,20 @@ export function expandSchedule(
   const dur = parseDuration(schedule.repeatFrequency);
   const exceptSet = new Set(schedule.exceptDates);
 
-  // Effective bounds
-  const boundsStart = schedule.startDate && schedule.startDate > now
-    ? schedule.startDate
-    : now;
-  const boundsEnd = schedule.endDate && schedule.endDate < until
-    ? schedule.endDate
-    : until;
+  const boundsStart =
+    schedule.startDate && schedule.startDate > now ? schedule.startDate : now;
+  const boundsEnd =
+    schedule.endDate && schedule.endDate < until ? schedule.endDate : until;
 
   if (boundsStart > boundsEnd) return [];
 
   const results: Date[] = [];
 
   if (schedule.byDay.length > 0) {
-    // Day-of-week based recurrence (most common: weekly Mass schedule)
-    // Walk day-by-day using UTC dates to avoid DST/local-time surprises.
     const daySet = new Set(schedule.byDay);
-
-    // Start cursor at UTC midnight of boundsStart
     const [sy, sm, sd] = utcYMD(boundsStart);
     const cursor = new Date(Date.UTC(sy, sm, sd));
 
-    // Anchor for multi-week cycle detection (clone to avoid mutation)
     const anchorSource = schedule.startDate ?? boundsStart;
     const [ay, am, ad] = utcYMD(anchorSource);
     const anchor = new Date(Date.UTC(ay, am, ad));
@@ -133,33 +116,32 @@ export function expandSchedule(
 
     while (cursor <= boundsEnd && results.length < limit) {
       if (daySet.has(cursor.getUTCDay())) {
-        // For multi-week frequencies, check we're in the right week cycle
         const weeksSinceAnchor = Math.round(
           (cursor.getTime() - anchor.getTime()) / weekMs
         );
         if (weeksSinceAnchor % repeatWeeks === 0) {
           const ymd = toYMD(cursor);
           if (!exceptSet.has(ymd)) {
-            const instance = schedule.startTime
-              ? applyTimeToDate(cursor, schedule.startTime, schedule.timezone)
-              : new Date(cursor);
-            results.push(instance);
+            results.push(
+              schedule.startTime
+                ? applyTimeToDate(cursor, schedule.startTime, schedule.timezone)
+                : new Date(cursor)
+            );
           }
         }
       }
       cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
   } else if (dur.days || dur.weeks || dur.months || dur.years) {
-    // Fixed-interval recurrence without byDay (less common)
     let cursor = new Date(boundsStart);
     while (cursor <= boundsEnd && results.length < limit) {
       const ymd = toYMD(cursor);
       if (!exceptSet.has(ymd)) {
-        const instance =
+        results.push(
           schedule.startTime
             ? applyTimeToDate(cursor, schedule.startTime, schedule.timezone)
-            : new Date(cursor);
-        results.push(instance);
+            : new Date(cursor)
+        );
       }
       cursor = addDuration(cursor, dur);
     }
@@ -175,34 +157,25 @@ function toArr<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-/**
- * Returns true if the event passes the given EventFilter.
- * Called before expansion so we never waste cycles on excluded events.
- */
 function matchesFilter(event: ParsedEvent, filter: EventFilter): boolean {
-  const serviceTypes = toArr(filter.serviceType);
+  const serviceTypes = toArr(filter.serviceType) as string[];
   const languages = toArr(filter.language);
 
-  // ── serviceType filter ──────────────────────────────────────────────────────
+  // ── serviceType ─────────────────────────────────────────────────────────────
   if (serviceTypes.length > 0) {
-    const hasType = !!event.serviceType;
-    if (!hasType) {
-      // Event has no additionalType — honour includeUntyped (default: false)
+    if (!event.serviceType) {
       if (filter.includeUntyped !== true) return false;
-    } else if (!serviceTypes.includes(event.serviceType as any)) {
+    } else if (!serviceTypes.includes(event.serviceType)) {
       return false;
     }
   }
-  // No serviceType filter → includeUntyped implicitly true (include everything)
 
-  // ── language filter ─────────────────────────────────────────────────────────
-  // Strict: if a language filter is active, only events that explicitly
-  // declare a matching language pass. Events with no language set are excluded.
+  // ── language ────────────────────────────────────────────────────────────────
   if (languages.length > 0) {
-    if (
-      event.languages.length === 0 ||
-      !event.languages.some((l) => languages.includes(l))
-    ) {
+    if (event.languages.length === 0) {
+      // No language declared — honour includeLanguageUnknown (default: false)
+      if (filter.includeLanguageUnknown !== true) return false;
+    } else if (!event.languages.some((l) => languages.includes(l))) {
       return false;
     }
   }
@@ -210,7 +183,7 @@ function matchesFilter(event: ParsedEvent, filter: EventFilter): boolean {
   return true;
 }
 
-// ─── Core resolver (shared by both public functions) ─────────────────────────
+// ─── Core resolver ────────────────────────────────────────────────────────────
 
 function resolveEvents(
   events: ParsedEvent[],
@@ -218,15 +191,13 @@ function resolveEvents(
   to: Date,
   opts: ExpandOptions,
   filter: EventFilter
-): MassInstance[] {
-  const instances: MassInstance[] = [];
+): EventInstance[] {
+  const instances: EventInstance[] = [];
 
   for (const event of events) {
-    // Pre-filter before any expansion work
     if (!matchesFilter(event, filter)) continue;
 
     if (event.schedule) {
-      // Skip stale schedules (endDate in the past)
       if (event.schedule.endDate && event.schedule.endDate < from) continue;
 
       const dates = expandSchedule(event.schedule, { ...opts, from, to });
@@ -269,14 +240,14 @@ function resolveEvents(
     }
   }
 
-  // Separate scheduled instances from one-off overrides (cancellations / rescheduling)
+  // Apply one-off cancellation/rescheduled overrides to matching scheduled instances
   const scheduled = instances.filter((i) => i.status === "scheduled");
   const overrides = instances.filter(
     (i) => i.status === "cancelled" || i.status === "rescheduled"
   );
 
-  const appliedOverrides = new Set<MassInstance>();
-  const result: MassInstance[] = [];
+  const appliedOverrides = new Set<EventInstance>();
+  const result: EventInstance[] = [];
 
   for (const s of scheduled) {
     const override = overrides.find(
@@ -292,8 +263,6 @@ function resolveEvents(
     }
   }
 
-  // Standalone overrides that didn't match a scheduled event (e.g. a one-off
-  // event that was later cancelled)
   for (const o of overrides) {
     if (!appliedOverrides.has(o)) result.push(o);
   }
@@ -304,35 +273,30 @@ function resolveEvents(
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Resolve a list of ParsedEvents into concrete MassInstance objects
+ * Resolve a list of ParsedEvents into concrete EventInstance objects
  * within the given time window, with optional filtering by service type
  * and language.
  *
- * This is the primary API. Use `WikidataId.*` constants for `serviceType`
- * to get full intellisense.
- *
  * @example
- * // All upcoming events in the next 7 days
  * getUpcomingEvents(events, { from, to })
  *
  * @example
- * // Only Mass and Adoration
  * getUpcomingEvents(events, {
  *   serviceType: [WikidataId.Mass, WikidataId.EucharisticAdoration],
  * })
  *
  * @example
- * // Latin Mass only, including parishes that haven't set additionalType
  * getUpcomingEvents(events, {
- *   serviceType: WikidataId.TraditionalLatinMass,
+ *   serviceType: WikidataId.Mass,
  *   language: "la",
  *   includeUntyped: true,
+ *   includeLanguageUnknown: true,
  * })
  */
 export function getUpcomingEvents(
   events: ParsedEvent[],
   opts: ExpandOptions & EventFilter = {}
-): MassInstance[] {
+): EventInstance[] {
   const from = opts.from ?? new Date();
   const to = opts.to ?? new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000);
   return resolveEvents(events, from, to, opts, opts);
@@ -344,16 +308,13 @@ export function getUpcomingEvents(
  *
  * Equivalent to:
  * ```ts
- * getUpcomingEvents(events, {
- *   serviceType: WikidataId.Mass,
- *   includeUntyped: true,
- * })
+ * getUpcomingEvents(events, { serviceType: WikidataId.Mass, includeUntyped: true })
  * ```
  */
 export function getUpcomingMasses(
   events: ParsedEvent[],
   opts: ExpandOptions = {}
-): MassInstance[] {
+): EventInstance[] {
   return getUpcomingEvents(events, {
     ...opts,
     serviceType: WikidataId.Mass,

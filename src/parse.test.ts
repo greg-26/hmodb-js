@@ -273,4 +273,23 @@ describe("getUpcomingEvents — filtering", () => {
     expect(results.map((r) => r.name)).not.toContain("Adoration");
     expect(results.map((r) => r.name)).not.toContain("TLM");
   });
+
+  it("excludes events with no language by default when language filter active", () => {
+    const results = getUpcomingEvents(all, { from, to, language: "es" });
+    expect(results.map((r) => r.name)).toEqual(["Spanish Mass"]);
+  });
+
+  it("includes events with no language when includeLanguageUnknown: true", () => {
+    const results = getUpcomingEvents(all, {
+      from, to,
+      language: "es",
+      includeLanguageUnknown: true,
+    });
+    // Should include Spanish Mass + all events without a language (Mass, Adoration, Parish Event)
+    const names = results.map((r) => r.name);
+    expect(names).toContain("Spanish Mass");
+    expect(names).toContain("Sunday Mass");
+    expect(names).toContain("Parish Event");
+    expect(names).not.toContain("TLM"); // has language "la", doesn't match "es"
+  });
 });

@@ -7,31 +7,11 @@ import type {
   ParsedLocation,
   ParsedSchedule,
   ParsedPerformer,
-  MassInstance,
+  EventStatusFriendly,
 } from "./types.js";
-import { EventStatus } from "./types.js";
+import { EventStatus, DayOfWeekIndex } from "./types.js";
 
-// ─── Schema.org DayOfWeek URIs → JS day numbers (0=Sun … 6=Sat) ─────────────
-
-const DAY_OF_WEEK: Record<string, number> = {
-  "https://schema.org/Sunday": 0,
-  "https://schema.org/Monday": 1,
-  "https://schema.org/Tuesday": 2,
-  "https://schema.org/Wednesday": 3,
-  "https://schema.org/Thursday": 4,
-  "https://schema.org/Friday": 5,
-  "https://schema.org/Saturday": 6,
-  // Short forms (some publishers use these)
-  Sunday: 0,
-  Monday: 1,
-  Tuesday: 2,
-  Wednesday: 3,
-  Thursday: 4,
-  Friday: 5,
-  Saturday: 6,
-};
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toArray<T>(v: T | T[] | undefined): T[] {
   if (v === undefined || v === null) return [];
@@ -71,24 +51,25 @@ function parseLanguages(raw?: string | string[]): string[] {
   return toArray(raw);
 }
 
-function parseStatus(raw?: string): MassInstance["status"] {
+function parseStatus(raw?: string): EventStatusFriendly {
   switch (raw) {
-    case EventStatus.Cancelled:
-      return "cancelled";
-    case EventStatus.Postponed:
-      return "postponed";
-    case EventStatus.Rescheduled:
-      return "rescheduled";
-    case EventStatus.MovedOnline:
-      return "movedOnline";
-    default:
-      return "scheduled";
+    case EventStatus.Cancelled:   return "cancelled";
+    case EventStatus.Postponed:   return "postponed";
+    case EventStatus.Rescheduled: return "rescheduled";
+    case EventStatus.MovedOnline: return "movedOnline";
+    default:                      return "scheduled";
   }
 }
 
 function parseSchedule(raw: RawSchedule): ParsedSchedule {
+  // Use shared day index; also accept short names ("Sunday") as fallback
+  const shortNameIndex: Record<string, number> = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+    Thursday: 4, Friday: 5, Saturday: 6,
+  };
+
   const days = toArray(raw.byDay)
-    .map((d) => DAY_OF_WEEK[d])
+    .map((d) => DayOfWeekIndex[d] ?? shortNameIndex[d])
     .filter((d) => d !== undefined) as number[];
 
   return {
@@ -103,7 +84,7 @@ function parseSchedule(raw: RawSchedule): ParsedSchedule {
   };
 }
 
-// ─── Public parser ────────────────────────────────────────────────────────────
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Parse a single raw schema.org Event object into a typed ParsedEvent.

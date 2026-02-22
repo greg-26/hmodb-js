@@ -4,7 +4,7 @@
  * @see https://masstimesprotocol.org/implementation/data-model
  */
 
-// ─── Wikidata service type identifiers ──────────────────────────────────────
+// ─── Wikidata service type identifiers ───────────────────────────────────────
 
 export const WikidataId = {
   Mass: "https://www.wikidata.org/wiki/Q132612",
@@ -18,7 +18,14 @@ export const WikidataId = {
 
 export type WikidataServiceId = (typeof WikidataId)[keyof typeof WikidataId];
 
-// ─── Event status ────────────────────────────────────────────────────────────
+/**
+ * Accepts a known WikidataServiceId (with full intellisense) or any other
+ * valid Wikidata URL. The `string & {}` trick preserves autocomplete while
+ * still allowing extension to custom identifiers.
+ */
+export type ServiceTypeInput = WikidataServiceId | (string & {});
+
+// ─── Event status ─────────────────────────────────────────────────────────────
 
 export const EventStatus = {
   Scheduled: "https://schema.org/EventScheduled",
@@ -30,6 +37,46 @@ export const EventStatus = {
 
 export type EventStatusValue = (typeof EventStatus)[keyof typeof EventStatus];
 
+/** Friendly status string used in parsed/resolved output */
+export type EventStatusFriendly =
+  | "scheduled"
+  | "cancelled"
+  | "postponed"
+  | "rescheduled"
+  | "movedOnline";
+
+// ─── Shared day-of-week constants ─────────────────────────────────────────────
+
+/** schema.org DayOfWeek URIs indexed by friendly name */
+export const DayOfWeekURI = {
+  Sunday: "https://schema.org/Sunday",
+  Monday: "https://schema.org/Monday",
+  Tuesday: "https://schema.org/Tuesday",
+  Wednesday: "https://schema.org/Wednesday",
+  Thursday: "https://schema.org/Thursday",
+  Friday: "https://schema.org/Friday",
+  Saturday: "https://schema.org/Saturday",
+} as const;
+
+/** schema.org DayOfWeek URIs indexed by JS day number (0 = Sunday) */
+export const DayOfWeekURIByIndex: string[] = [
+  DayOfWeekURI.Sunday,
+  DayOfWeekURI.Monday,
+  DayOfWeekURI.Tuesday,
+  DayOfWeekURI.Wednesday,
+  DayOfWeekURI.Thursday,
+  DayOfWeekURI.Friday,
+  DayOfWeekURI.Saturday,
+];
+
+/** Reverse map: schema.org URI → JS day number (0 = Sunday) */
+export const DayOfWeekIndex: Record<string, number> = Object.fromEntries(
+  Object.entries(DayOfWeekURI).map(([name, uri]) => [
+    uri,
+    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].indexOf(name),
+  ])
+);
+
 // ─── Event filter ─────────────────────────────────────────────────────────────
 
 export interface EventFilter {
@@ -38,34 +85,34 @@ export interface EventFilter {
    * Use `WikidataId.*` constants for convenience and intellisense.
    *
    * @example
-   * // Single type
    * serviceType: WikidataId.Mass
-   *
-   * @example
-   * // Multiple types
    * serviceType: [WikidataId.Mass, WikidataId.EucharisticAdoration]
    */
-  serviceType?: WikidataServiceId | WikidataServiceId[];
+  serviceType?: ServiceTypeInput | ServiceTypeInput[];
 
   /**
    * Only return events matching these BCP 47 language code(s).
    *
    * @example
-   * language: "la"           // Latin Mass only
+   * language: "la"           // Latin only
    * language: ["en", "es"]   // English or Spanish
    */
   language?: string | string[];
 
   /**
    * Whether to include events that have no `additionalType` set.
-   *
-   * Defaults to `true` when no `serviceType` filter is active (include everything).
-   * Defaults to `false` when a `serviceType` filter is active (strict match).
-   *
-   * Set to `true` alongside a `serviceType` filter to also catch parishes
-   * that haven't adopted `additionalType` yet.
+   * Defaults to `false` when a `serviceType` filter is active, `true` otherwise.
    */
   includeUntyped?: boolean;
+
+  /**
+   * Whether to include events that have no `inLanguage` set.
+   * Defaults to `false` when a `language` filter is active, `true` otherwise.
+   *
+   * Set to `true` to catch parishes that publish in your language but haven't
+   * adopted `inLanguage` yet.
+   */
+  includeLanguageUnknown?: boolean;
 }
 
 // ─── Raw JSON-LD types (as they appear on parish websites) ───────────────────
@@ -73,7 +120,8 @@ export interface EventFilter {
 export interface RawPlace {
   "@type": "Place";
   name?: string;
-  sameAs?: string; // OpenStreetMap URL e.g. https://www.openstreetmap.org/node/123456789
+  /** OpenStreetMap URL — e.g. https://www.openstreetmap.org/node/123456789 */
+  sameAs?: string;
   address?: {
     "@type": "PostalAddress";
     streetAddress?: string;
@@ -86,11 +134,11 @@ export interface RawPlace {
 export interface RawSchedule {
   "@type": "Schedule";
   byDay?: string | string[]; // schema.org DayOfWeek URIs
-  startTime?: string; // "HH:mm" or "HH:mm:ss"
+  startTime?: string;        // "HH:mm" or "HH:mm:ss"
   endTime?: string;
-  repeatFrequency?: string; // ISO 8601 duration: "P1W", "P1D", etc.
-  startDate?: string; // "YYYY-MM-DD"
-  endDate?: string; // "YYYY-MM-DD"
+  repeatFrequency?: string;  // ISO 8601 duration: "P1W", "P1D", "P2W", etc.
+  startDate?: string;        // "YYYY-MM-DD"
+  endDate?: string;          // "YYYY-MM-DD"
   exceptDate?: string | string[]; // "YYYY-MM-DD"
   scheduleTimezone?: string; // IANA timezone e.g. "Europe/Madrid"
 }
@@ -106,11 +154,11 @@ export interface RawEvent {
   "@type": "Event";
   name?: string;
   description?: string;
-  additionalType?: string; // Wikidata URL
-  startDate?: string; // "YYYY-MM-DDTHH:mm:ssZ" or "YYYY-MM-DD"
+  additionalType?: string;   // Wikidata URL
+  startDate?: string;        // "YYYY-MM-DDTHH:mm:ssZ" or "YYYY-MM-DD"
   endDate?: string;
   previousStartDate?: string; // for EventRescheduled
-  eventStatus?: string; // schema.org EventStatusType URL
+  eventStatus?: string;       // schema.org EventStatusType URL
   eventSchedule?: RawSchedule;
   location?: RawPlace;
   inLanguage?: string | string[]; // BCP 47 language tags
@@ -118,11 +166,11 @@ export interface RawEvent {
   image?: string;
 }
 
-// ─── Parsed / resolved types ─────────────────────────────────────────────────
+// ─── Parsed / resolved types ──────────────────────────────────────────────────
 
 export interface ParsedLocation {
   name?: string;
-  /** OpenStreetMap node/way/relation ID extracted from the sameAs URL */
+  /** "node/123456789", "way/456", or "relation/789" */
   osmId?: string;
   /** Full OpenStreetMap URL */
   osmUrl?: string;
@@ -155,17 +203,33 @@ export interface ParsedSchedule {
   timezone?: string;
 }
 
-/** A single resolved Mass instance with a concrete start time */
-export interface MassInstance {
-  /** Resolved local start time */
+/** A parsed Event that may be a one-off or a recurring schedule */
+export interface ParsedEvent {
+  name: string;
+  description?: string;
+  serviceType?: string;
+  status: EventStatusFriendly;
+  location?: ParsedLocation;
+  languages: string[];
+  performers: ParsedPerformer[];
+  startDate?: Date;
+  endDate?: Date;
+  previousStartDate?: Date;
+  schedule?: ParsedSchedule;
+}
+
+/**
+ * A single resolved service instance with a concrete start time.
+ * The output of `getUpcomingEvents()`.
+ */
+export interface EventInstance {
   startDate: Date;
-  /** Resolved local end time (if known) */
   endDate?: Date;
   name: string;
   description?: string;
   /** Wikidata service type URL */
   serviceType?: string;
-  status: "scheduled" | "cancelled" | "postponed" | "rescheduled" | "movedOnline";
+  status: EventStatusFriendly;
   location?: ParsedLocation;
   /** BCP 47 language codes */
   languages: string[];
@@ -174,19 +238,8 @@ export interface MassInstance {
   previousStartDate?: Date;
 }
 
-/** A parsed Event that may be a one-off or a recurring schedule */
-export interface ParsedEvent {
-  name: string;
-  description?: string;
-  serviceType?: string;
-  status: MassInstance["status"];
-  location?: ParsedLocation;
-  languages: string[];
-  performers: ParsedPerformer[];
-  /** Set for one-off events */
-  startDate?: Date;
-  endDate?: Date;
-  previousStartDate?: Date;
-  /** Set for recurring schedule events */
-  schedule?: ParsedSchedule;
-}
+/**
+ * @deprecated Use `EventInstance` instead.
+ * Kept for backwards compatibility — will be removed in v1.0.
+ */
+export type MassInstance = EventInstance;
